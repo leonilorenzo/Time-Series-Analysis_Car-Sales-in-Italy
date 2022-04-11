@@ -1,0 +1,1176 @@
+---
+title: 'Time Series Analysis: Car Sales In Italy'
+author: "Lorenzo Leoni"
+output:
+  html_notebook: default
+---
+
+```{r}
+# Load Library
+
+library(data.table) # transpose
+library(forecast) # base
+library(ggplot2) # base
+library(TSstudio) #ts_plot, ts_heatmap, ts_seasonal
+library(tseries) # adf.test
+library(tsutils) # BIC
+library(funtimes) # notrend_test
+library(flexmix) # mseastest
+
+```
+
+```{r}
+# Functions
+
+my_plot.decomposed.ts = function(x, title="", ...) {
+  xx <- x$x
+  if (is.null(xx)) 
+    xx <- with(x, if (type == "additive") 
+      random + trend + seasonal
+      else random * trend * seasonal)
+  plot(cbind(observed = xx, trend = x$trend, seasonal = x$seasonal, random = x$random), 
+       main=title, ...)
+} # In order to add personal title
+
+my_plot.lags.ts = function (ts.obj, lags = 1:12, main = "", margin = 0.02, Xshare = TRUE, 
+    Yshare = TRUE, n_plots = 3) 
+{
+    `%>%` <- magrittr::`%>%`
+    df <- df_wide <- p <- obj.name <- lag <- lag_plots <- time <- NULL
+    obj.name <- base::deparse(base::substitute(ts.obj))
+    if (!is.numeric(lags)) {
+        warning("The 'lags' parameter is not valid, using the defualt setting (lags = 1:12)")
+        lags <- 1:12
+    }
+    else if (base::any(lags <= 0)) {
+        warning("The 'lags' parameter is not valid, using the defualt setting (lags = 1:12)")
+        lags <- 1:12
+    }
+    else if (!all(base::round(lags) == lags)) {
+        stop("Some of the inputs of the 'lags' argument are not integer type")
+    }
+    if (!is.numeric(margin)) {
+        warning("The 'margin' parameter is not valid, using the defualt setting (margin = 0.2)")
+        margin <- 0.2
+    }
+    if (!is.logical(Xshare)) {
+        warning("The 'Xshare' parameter is not valid, please use only boolean operators.", 
+            " Using the defualt setting setting (Xshare = TRUE")
+        Xshare <- TRUE
+    }
+    if (!is.logical(Yshare)) {
+        warning("The 'Yshare' parameter is not valid, please use only boolean operators.", 
+            " Using the defualt setting setting (Yshare = TRUE")
+        Yshare <- TRUE
+    }
+    if (stats::is.ts(ts.obj)) {
+        if (stats::is.mts(ts.obj)) {
+            warning("The 'ts.obj' has multiple columns, only the first column will be plot")
+            ts.obj <- ts.obj[, 1]
+        }
+        df <- base::data.frame(time = stats::time(ts.obj), y = base::as.numeric(ts.obj)) %>% 
+            dplyr::arrange(time)
+    }
+    else if (xts::is.xts(ts.obj) | zoo::is.zoo(ts.obj)) {
+        if (!is.null(base::dim(ts.obj))) {
+            if (base::dim(ts.obj)[2] > 1) {
+                warning("The 'ts.obj' has multiple columns, only the first column will be plot")
+                ts.obj <- ts.obj[, 1]
+            }
+        }
+        df <- base::data.frame(time = zoo::index(ts.obj), y = base::as.numeric(ts.obj)) %>% 
+            dplyr::arrange(time)
+    }
+    else {
+        stop("The input object is not valid (must be 'ts', 'xts', or 'zoo')")
+    }
+    p_list <- lapply(base::seq_along(lags), function(i) {
+        plotly::plot_ly(x = df$y %>% dplyr::lag(lags[i]), y = df$y, 
+            type = "scatter", mode = "markers") %>% plotly::layout(xaxis = list(title = "", 
+            range = c(base::min(stats::na.omit(df$y)), base::max(stats::na.omit(df$y)))), 
+            yaxis = list(range = c(base::min(stats::na.omit(df$y)), 
+                base::max(stats::na.omit(df$y)))), annotations = list(text = paste("Lag", 
+                lags[i], sep = " "), xref = "paper", yref = "paper", 
+                yanchor = "bottom", xanchor = "center", align = "center", 
+                x = 0.5, y = 0.9, showarrow = FALSE))
+    })
+    p <- base::suppressWarnings(plotly::subplot(p_list, nrows = base::ceiling(base::length(p_list)/n_plots), 
+        margin = margin, shareX = Xshare, shareY = Yshare) %>% 
+        plotly::layout(title = main) %>% plotly::hide_legend())
+    return(p)
+} # In order to add personal title
+
+
+```
+
+
+```{r}
+# Load Data
+
+Sales <- read.csv('/Users/lorenzoleoni/Desktop/Materiale Personale/Projects/Time Series Analysis - Car Sales In Italy/data/SalesITA.csv',
+                  header = TRUE,
+                  sep = ";",
+                  dec = ",")
+
+```
+
+## DATA PRE-PROCESSING
+
+```{r}
+# Preparation of Data
+
+t <- transpose(Sales)
+
+names(t) <- Sales[,'Make'] # save columns names as models
+
+t <- t[-c(1),] # drop row Make
+
+t <- as.data.frame(lapply(t,as.integer)) # convert value into integers
+
+row.names(t) <- names(Sales[,2:124]) # save rows names as periods
+
+t$ITALY <- rowSums(t)
+
+```
+
+```{r}
+# Italy Sales Time Series
+
+ITA <- ts(t$ITALY,
+        start = c(2012, 1), 
+        end = c(2022,03),
+        freq = 12)
+```
+
+## TIME SERIES ANALYSIS
+
+```{r}
+# Summary Statistics
+
+summary(ITA)
+
+```
+
+```{r, fig.width = 8, fig.height = 5}
+# Time Series
+
+ts_plot(ITA,
+     Xgrid = T, 
+     Ygrid = T,
+     Ytitle = "Units",
+     Xtitle = "Year",
+     title = "Time Series - Italy Sales",
+     width = 2,
+     color = "black")
+
+```
+
+```{r, fig.width = 8, fig.height = 8}
+# Seasonal Italy Sales
+
+ts_seasonal(ITA,
+            type = "all",
+            title = "Seasonal - Italy Sales")
+
+```
+
+```{r, fig.width = 8, fig.height = 7}
+# Cycle and Seasonal Analysis
+
+ts_heatmap(ITA,
+           title = "Heatmap - Italy Sales")
+
+```
+
+```{r}
+# Method of coefficient of variation of seasonal differences and quotients
+
+i = 13
+k = 0
+
+D = vector() # Seasonal Difference
+Q = vector() # Seasonal Quotient
+
+while (k<length(ITA)-12){
+  
+  D[i-12] <- ITA[i]-ITA[i-12]
+  Q[i-12] <- ITA[i]/ITA[i-12]
+  
+  i = i + 1
+  k = k + 1
+  
+}
+
+cv_d = sd(D)/mean(D) # coefficient of variation of the seasonal differences
+
+cv_q = sd(Q)/mean(Q) # coefficient of variation of the seasonal quotients
+
+dec = list()
+
+seasonal_test <- mseastest(ITA, type = "pearson", m = 12)
+
+if (abs(cv_q) <= abs(cv_d) & seasonal_test$is.multiplicative == T){
+  print("The time series is multiplicative")
+  dec = "mult"} else if (abs(cv_q) > abs(cv_d) & seasonal_test$is.multiplicative == F){
+    print("The time series is additive") 
+    dec = "add"} else{
+      print("Tests have different results")
+      }
+
+```
+
+
+```{r}
+# Decomposition Time Series
+
+ITA.dec <- decompose(ITA,
+                   type = dec)
+
+my_plot.decomposed.ts(ITA.dec, 
+                      title = "Decomposition Time Series - Italy Sales",
+                      cex.main = 1,
+                      font.main = 1,
+                      col.main = "#444444",
+                      col.lab = "#444444",
+                      cex.lab = 0.8,
+                      cex.axis = 1,
+                      xlab = "Year",
+                      lwd = 2)
+
+```
+
+```{r}
+# Autocorrelation
+
+ac <- acf(ITA,
+          lag.max = 24,
+          plot = F)
+
+par(cex.main = 1,
+    font.main = 1,
+    col.main = "#444444",
+    font.lab=1,
+    col.lab = "#444444",
+    cex.lab = 0.8,
+    cex.axis = 0.8)
+plot(ac, main = "")
+title(main = "Autocorrelation Italy Sales")
+
+```
+
+```{r}
+# Partial Autocorrelation
+
+pac <- pacf(ITA,
+            lag.max = 24,
+            plot = F)
+
+par(cex.main = 1,
+    font.main = 1,
+    col.main = "#444444",
+    font.lab=1,
+    col.lab = "#444444",
+    cex.lab = 0.8,
+    cex.axis = 0.8)
+plot(pac, main = "")
+title(main = "Partial Autocorrelation Italy Sales")
+
+```
+
+```{r, fig.width = 8, fig.height = 5}
+# Seasonal Adjustment 
+
+ITA_des <- diff(ITA,
+              lag = 12)
+
+ts_plot(ITA_des,
+        Xgrid = T, 
+        Ygrid = T,
+        Xtitle = "Year",
+        title = "TS Deseasonalized - Italy Sales",
+        width = 2,
+        color = "black")
+
+```
+
+```{r}
+# Autocorrelation TS Deseasonalized
+
+ac <- acf(ITA_des,
+          lag.max = 24,
+          plot = F)
+
+par(cex.main = 1,
+    font.main = 1,
+    col.main = "#444444",
+    font.lab=1,
+    col.lab = "#444444",
+    cex.lab = 0.8,
+    cex.axis = 0.8)
+
+plot(ac, main = "")
+title(main = "TS Deseasonalized - Autocorrelation Italy Sales")
+
+```
+
+```{r}
+# Partial Autocorrelation TS Deseasonalized
+
+ac <- pacf(ITA_des,
+           lag.max = 24,
+           plot = F)
+
+par(cex.main = 1,
+    font.main = 1,
+    col.main = "#444444",
+    font.lab=1,
+    col.lab = "#444444",
+    cex.lab = 0.8,
+    cex.axis = 0.8)
+
+plot(ac, main = "")
+title(main = "TS Deseasonalized - Partial Autocorrelation Italy Sales")
+
+```
+
+```{r, fig.width = 8, fig.height = 5}
+# Trend Adjustment 
+
+ITA_det <- diff(ITA,
+              lag = 1)
+
+ts_plot(ITA_det,
+        Xgrid = T, 
+        Ygrid = T,
+        Xtitle = "Year",
+        title = "TS Detrendalized - Italy Sales",
+        width = 2,
+        color = "black")
+
+```
+
+```{r}
+# Autocorrelation TS Detrendalized
+
+ac <- acf(ITA_det,
+          lag.max = 24,
+          plot = F)
+
+par(cex.main = 1,
+    font.main = 1,
+    col.main = "#444444",
+    font.lab=1,
+    col.lab = "#444444",
+    cex.lab = 0.8,
+    cex.axis = 0.8)
+
+plot(ac, main = "")
+title(main = "TS Detrendalized - Autocorrelation Italy Sales")
+
+```
+
+```{r}
+# Partial Autocorrelation TS Detrendalized
+
+ac <- pacf(ITA_det,
+           lag.max = 24,
+           plot = F)
+
+par(cex.main = 1,
+    font.main = 1,
+    col.main = "#444444",
+    font.lab=1,
+    col.lab = "#444444",
+    cex.lab = 0.8,
+    cex.axis = 0.8)
+
+plot(ac, main = "")
+title(main = "TS Detrendalized - Partial Autocorrelation Italy Sales")
+
+```
+
+```{r, fig.width = 8, fig.height = 7}
+# Lag Plots
+
+my_plot.lags.ts(ITA,
+                main = "Lag Plots - Italy Sales")
+
+```
+
+## TIME SERIES MODEL SELECTION
+
+#### HWES (Holt-Winter’s Exponential Smoothing Model)
+
+```{r}
+# HWES - Auto
+
+train.ts <- window(ITA,
+                   start = c(2012,1),
+                   end = c(2021,3))
+test.ts <- window(ITA,
+                  start = c(2021,3),
+                  end = c(2022,3))
+
+hw <- ets(train.ts,
+          model = "ZZZ",
+          restrict = F,
+          allow.multiplicative.trend = T) # see plot seasonal in decompose
+
+hw$method 
+
+# Introductory Time Series With R - P. S. P. Cowperwait & A. V. Metcalfe (2009), pag 86
+
+```
+
+```{r}
+# Wavk Test for Trend Detection
+
+notrend_test(train.ts,
+             test = "WAVK",
+             ar.method = "burg",
+             ar.order = 2,
+             BIC = F) 
+
+# Why Yule-Walker Should Not Be Used For Autoregressive Modelling.pdf
+# funtimes.pdf, pag 25
+
+```
+
+```{r, fig.width = 8, fig.height = 6}
+# HWES - Additive Error
+
+hw <- ets(train.ts,
+          model = "ANM", # M seasonal how shown in previous section
+          restrict = F)
+
+hw.pred <- forecast(hw,
+                    h = 12,
+                    level = 0)
+
+Train_Set <- train.ts
+
+Test_Set <- test.ts
+
+HW_Train <- hw$fitted
+
+HW_Test <- ts(c(hw$fitted[111], hw.pred$mean), 
+                    start = c(2021,3), 
+                    end = c(2022,3), 
+                    frequency = 12)
+
+ts_plot(cbind(Train_Set,Test_Set,HW_Train,HW_Test),
+        slider = T,
+        Xgrid = T, 
+        Ygrid = T,
+        Ytitle = "Units",
+        Xtitle = "Year",
+        title = "HWES (A,N,M)",
+        width = 2)
+
+```
+
+```{r}
+# Metrics for HWES - Additive Error
+
+print(paste("HWES Model with additive error --> AIC:",
+            round(hw$aic,2),
+            "BIC:",
+            round(hw$bic,2),
+            "AICc:",
+            round(hw$aicc,2)))
+
+
+```
+
+```{r}
+# Plot Residuals and Ljung-Box Test - H0: The level of correlation between the series and its lag is equal to zero, and therefore the series observations are independent
+
+checkresiduals(hw,
+               lag = 24)
+```
+
+```{r}
+# Shapiro-Wilk Test - H0: Normally Distributed
+
+shapiro.test(hw$residuals)
+
+```
+
+
+```{r, fig.width = 8, fig.height = 6}
+# HWES - Multiplicative Error
+
+hw <- ets(train.ts,
+          model = "MNM",
+          restrict = F) # see plot seasonal in decompose
+
+hw.pred <- forecast(hw,
+                    h = 12,
+                    level = 0)
+
+HW_Train <- hw$fitted
+
+HW_Test <- ts(c(hw$fitted[111], hw.pred$mean), 
+                    start = c(2021,3), 
+                    end = c(2022,3), 
+                    frequency = 12)
+
+ts_plot(cbind(Train_Set,Test_Set,HW_Train,HW_Test),
+        slider = T,
+        Xgrid = T, 
+        Ygrid = T,
+        Ytitle = "Units",
+        Xtitle = "Year",
+        title = "HWES (M,N,M)",
+        width = 2)
+
+```
+
+```{r}
+# Metrics for HWES - Multiplicative Error
+
+print(paste("HWES Model with multiplicative error --> AIC:",
+            round(hw$aic,2),
+            "BIC:",
+            round(hw$bic,2),
+            "AICc:",
+            round(hw$aicc,2)))
+
+```
+
+```{r}
+# Plot Residuals and Ljung-Box Test - H0: The level of correlation between the series and its lag is equal to zero, and therefore the series observations are independent
+
+checkresiduals(hw,
+               lag = 24)
+
+```
+
+```{r}
+# Shapiro-Wilk Test - H0: Normally Distributed
+
+shapiro.test(hw$residuals)
+
+```
+
+#### SARIMA (Seasonal Autoregressive Integrated Moving Average)
+
+```{r}
+# SARIMA Models
+
+train.ts <- window(ITA, 
+                   start = c(2012,1),
+                   end = c(2021,3))
+valid.ts <- window(ITA, 
+                   start = c(2021,3), 
+                   end = c(2021,9))
+test.ts <- window(ITA, 
+                  start = c(2021,9), 
+                  end = c(2022,3))
+
+sarima <- auto.arima(train.ts, 
+                     seasonal = T) # (0,1,0)(2,0,0)
+
+print(paste("Auto SARIMA Model --> AIC:",
+            round(sarima$aic,2),
+            "BIC:",
+            round(sarima$bic,2)))
+
+sarima <- Arima(train.ts, 
+                order = c(2,1,3), 
+                seasonal = c(1,1,1))
+
+print(paste("SARIMA Model based on theory --> AIC:",
+            round(AIC(sarima),2),
+            "BIC:",
+            round(BIC(sarima),2)))
+
+sarima <- Arima(train.ts, 
+                order = c(0,1,0),
+                seasonal = c(1,1,1))
+
+print(paste("SARIMA Model near to auto.arima --> AIC:",
+            round(AIC(sarima),2),
+            "BIC:",
+            round(BIC(sarima),2)))
+
+```
+
+```{r, fig.width = 8, fig.height = 6}
+# Auto SARIMA Model
+
+sarima <- auto.arima(train.ts, 
+                     seasonal = T)
+
+sarima.pred <- forecast(sarima,
+                          h = 6,
+                          level = 0)
+
+Train_Set <- train.ts
+
+Validation_Set <- valid.ts
+
+Auto_SARIMA_Train <- sarima.pred$fitted
+
+Auto_SARIMA_Validation <- ts(c(sarima.pred$fitted[111], sarima.pred$mean), 
+                    start = c(2021,3), 
+                    end = c(2021,9), 
+                    frequency = 12)
+
+ts_plot(cbind(Train_Set,Validation_Set,Auto_SARIMA_Train,Auto_SARIMA_Validation),
+        slider = T,
+        Xgrid = T, 
+        Ygrid = T,
+        Ytitle = "Units",
+        Xtitle = "Year",
+        title = "Auto SARIMA(0,1,0)x(2,0,0)",
+        width = 2)
+
+```
+
+```{r}
+# Plot Residuals and Ljung-Box Test - H0: The level of correlation between the series and its lag is equal to zero, and therefore the series observations are independent
+
+checkresiduals(sarima,
+               lag = 24)
+
+```
+
+```{r}
+# Shapiro-Wilk Test - H0: Normally Distributed
+
+shapiro.test(sarima$residuals)
+
+```
+
+```{r}
+# Scoring Auto SARIMA Model
+
+ac <- accuracy(sarima.pred, valid.ts)
+
+row.names(ac)[2] <- "Validation Set"
+
+ac
+
+```
+
+```{r, fig.width = 8, fig.height = 6}
+# SARIMA Model based on Theory
+
+sarima <- Arima(train.ts, 
+                order = c(2,1,3), 
+                seasonal = c(1,1,1))
+
+sarima.pred <- forecast(sarima,
+                        h = 6,
+                        level = 0)
+
+Train_Set <- train.ts
+
+Validation_Set <- valid.ts
+
+SARIMA_Theory_Train <- sarima.pred$fitted
+
+SARIMA_Theory_Validation <- ts(c(sarima.pred$fitted[111], sarima.pred$mean), 
+                    start = c(2021,3), 
+                    end = c(2021,9), 
+                    frequency = 12)
+
+ts_plot(cbind(Train_Set,Validation_Set,SARIMA_Theory_Train,SARIMA_Theory_Validation),
+        slider = T,
+        Xgrid = T, 
+        Ygrid = T,
+        Ytitle = "Units",
+        Xtitle = "Year",
+        title = "SARIMA(2,1,3)x(1,1,1)",
+        width = 2)
+
+```
+
+```{r}
+# Plot Residuals and Ljung-Box Test - H0: The level of correlation between the series and its lag is equal to zero, and therefore the series observations are independent
+
+checkresiduals(sarima,
+               lag = 24)
+
+```
+
+```{r}
+# Shapiro-Wilk Test - H0: Normally Distributed
+
+shapiro.test(sarima$residuals)
+
+```
+
+```{r}
+# Scoring SARIMA Model based on Theory
+
+ac <- accuracy(sarima.pred, valid.ts)
+
+row.names(ac)[2] <- "Validation Set"
+
+ac
+
+```
+
+```{r, fig.width = 8, fig.height = 6}
+# SARIMA Model near to Auto
+
+sarima <- Arima(train.ts, 
+                order = c(0,1,0),
+                seasonal = c(1,1,1))
+
+sarima.pred <- forecast(sarima,
+                          h = 6,
+                          level = 0)
+
+Train_Set <- train.ts
+
+Validation_Set <- valid.ts
+
+SARIMA_Near_Train <- sarima.pred$fitted
+
+SARIMA_Near_Validation <- ts(c(sarima.pred$fitted[111], sarima.pred$mean), 
+                    start = c(2021,3), 
+                    end = c(2021,9), 
+                    frequency = 12)
+
+ts_plot(cbind(Train_Set,Validation_Set,SARIMA_Near_Train,SARIMA_Near_Validation),
+        slider = T,
+        Xgrid = T, 
+        Ygrid = T,
+        Ytitle = "Units",
+        Xtitle = "Year",
+        title = "SARIMA(0,1,0)x(1,1,1)",
+        width = 2)
+
+```
+
+```{r}
+# Plot Residuals and Ljung-Box Test - H0: The level of correlation between the series and its lag is equal to zero, and therefore the series observations are independent
+
+checkresiduals(sarima,
+               lag = 24)
+
+```
+
+```{r}
+# Shapiro-Wilk Test - H0: Normally Distributed
+
+shapiro.test(sarima$residuals)
+
+```
+
+```{r}
+# Scoring SARIMA Model Near to Auto
+
+ac <- accuracy(sarima.pred, valid.ts)
+
+row.names(ac)[2] <- "Validation Set"
+
+ac
+
+```
+
+#### SARIMAX (Seasonal Autoregressive Integrated Moving Average Exogenous)
+
+```{r, fig.width = 8, fig.height = 5}
+# Load Data and MIB Time Series
+
+MIB <- read.csv('/Users/lorenzoleoni/Desktop/Materiale Personale/Projects/Time Series Analysis - Car Sales In Italy/data/MIB_12-22.csv',
+                  header = TRUE,
+                  sep = ";",
+                  dec = ".")
+
+MIB <- ts(MIB$CLOSE, start = c(2012,1), frequency = 12)
+
+ts_plot(MIB,
+     Xgrid = T, 
+     Ygrid = T,
+     Ytitle = "Value",
+     Xtitle = "Year",
+     title = "Time Series - MIB",
+     width = 2,
+     color = "black")
+
+```
+
+```{r, fig.width = 8, fig.height = 6}
+
+# SARIMAX with MIB
+
+train.MIB <- window(MIB, 
+                   start = c(2012,1),
+                   end = c(2021,3))
+valid.MIB <- window(MIB, 
+                   start = c(2021,3), 
+                   end = c(2021,9))
+
+sarimax <- Arima(train.ts, 
+                order = c(2,1,3),
+                seasonal = list(order = c(1,1,1), period = 12),
+                xreg=train.MIB)
+
+sarimax.pred <- forecast(sarimax,
+                          h = 6,
+                          level = 0,
+                          xreg=valid.MIB)
+
+Train_Set <- train.ts
+
+Validation_Set <- valid.ts
+
+SARIMAX_MIB_Train <- sarimax.pred$fitted
+
+SARIMAX_MIB_Validation <- ts(c(sarimax.pred$fitted[111], sarimax.pred$mean), 
+                    start = c(2021,3), 
+                    end = c(2021,9), 
+                    frequency = 12)
+
+ts_plot(cbind(Train_Set,Validation_Set,SARIMAX_MIB_Train,SARIMAX_MIB_Validation),
+        slider = T,
+        Xgrid = T, 
+        Ygrid = T,
+        Ytitle = "Units",
+        Xtitle = "Year",
+        title = "SARIMAX(2,1,3)x(1,1,1) - MIB",
+        width = 2)
+
+```
+```{r}
+# Metrics SARIMAX Model with MIB
+
+print(paste("SARIMAX Model with MIB as regressor --> AIC:",
+            round(AIC(sarimax),2),
+            "BIC:",
+            round(BIC(sarimax),2)))
+
+```
+
+```{r}
+# Plot Residuals and Ljung-Box Test - H0: The level of correlation between the series and its lag is equal to zero, and therefore the series observations are independent
+
+checkresiduals(sarimax,
+               lag = 24)
+
+```
+
+```{r}
+# Shapiro-Wilk Test - H0: Normally Distributed
+
+shapiro.test(sarimax$residuals)
+
+```
+
+```{r}
+# Scoring SARIMAX Model with MIB
+
+ac <- accuracy(sarimax.pred, valid.ts)
+
+row.names(ac)[2] <- "Validation Set"
+
+ac
+
+```
+
+```{r, fig.width = 8, fig.height = 5}
+# Load Data and Unemployment Rate Time Series
+
+Unr <- read.csv('/Users/lorenzoleoni/Desktop/Materiale Personale/Projects/Time Series Analysis - Car Sales In Italy/data/Unemployment_Rate_12-22.csv',
+                  header = TRUE,
+                  sep = ";",
+                  dec = ".")
+
+Unr <- ts(Unr$Tax, start = c(2012,1), frequency = 12)
+
+ts_plot(Unr,
+     Xgrid = T, 
+     Ygrid = T,
+     Ytitle = "Value",
+     Xtitle = "Year",
+     title = "Time Series - Unemployment Rate",
+     width = 2,
+     color = "black")
+
+```
+
+```{r, fig.width = 8, fig.height = 6}
+
+# SARIMAX with Unemployment Rate
+
+train.Unr <- window(Unr, 
+                   start = c(2012,1),
+                   end = c(2021,3))
+valid.Unr <- window(Unr, 
+                   start = c(2021,3), 
+                   end = c(2021,9))
+
+sarimax <- Arima(train.ts, 
+                order = c(2,1,3),
+                seasonal = list(order = c(1,1,1), period = 12),
+                xreg=train.Unr)
+
+sarimax.pred <- forecast(sarimax,
+                          h = 6,
+                          level = 0,
+                          xreg=valid.Unr)
+
+Train_Set <- train.ts
+
+Validation_Set <- valid.ts
+
+SARIMAX_Unr_Train <- sarimax.pred$fitted
+
+SARIMAX_Unr_Validation <- ts(c(sarimax.pred$fitted[111], sarimax.pred$mean), 
+                    start = c(2021,3), 
+                    end = c(2021,9), 
+                    frequency = 12)
+
+ts_plot(cbind(Train_Set,Validation_Set,SARIMAX_Unr_Train,SARIMAX_Unr_Validation),
+        slider = T,
+        Xgrid = T, 
+        Ygrid = T,
+        Ytitle = "Units",
+        Xtitle = "Year",
+        title = "SARIMAX(2,1,3)x(1,1,1) - Unemployment Rate",
+        width = 2)
+
+```
+
+```{r}
+# Metrics SARIMAX Model with Unr
+
+print(paste("SARIMAX Model with Unr as regressor --> AIC:",
+            round(AIC(sarimax),2),
+            "BIC:",
+            round(BIC(sarimax),2)))
+
+```
+
+```{r}
+# Plot Residuals and Ljung-Box Test - H0: The level of correlation between the series and its lag is equal to zero, and therefore the series observations are independent
+
+checkresiduals(sarimax,
+               lag = 24)
+
+```
+
+```{r}
+# Shapiro-Wilk Test - H0: Normally Distributed
+
+shapiro.test(sarimax$residuals)
+
+```
+
+```{r}
+# Scoring SARIMAX Model with Unemployment Rate
+
+ac <- accuracy(sarimax.pred, valid.ts)
+
+row.names(ac)[2] <- "Validation Set"
+
+ac
+
+```
+
+## TIME SERIES FORECASTING
+
+```{r}
+# Train and Test Sets
+
+train.ts <- window(ITA, 
+                   start = c(2012,1),
+                   end = c(2021,9))
+
+test.ts <- window(ITA, 
+                  start = c(2021,9), 
+                  end = c(2022,3))
+
+```
+
+```{r, fig.width = 8, fig.height = 6}
+# SARIMA Model based on Theory
+
+sarima <- Arima(train.ts, 
+                order = c(2,1,3), 
+                seasonal = c(1,1,1))
+
+sarima.pred <- forecast(sarima,
+                        h = 6,
+                        level = 0)
+
+Train_Set <- train.ts
+
+Test_Set <- test.ts
+
+SARIMA_Theory_Train <- sarima.pred$fitted
+
+SARIMA_Theory_Test <- ts(c(sarima.pred$fitted[117], sarima.pred$mean), 
+                    start = c(2021,9), 
+                    end = c(2022,3), 
+                    frequency = 12)
+
+ts_plot(cbind(Train_Set,Test_Set,SARIMA_Theory_Train,SARIMA_Theory_Test),
+        slider = T,
+        Xgrid = T, 
+        Ygrid = T,
+        Ytitle = "Units",
+        Xtitle = "Year",
+        title = "SARIMA(2,1,3)x(1,1,1)",
+        width = 2)
+
+```
+
+```{r}
+# Metrics for SARIMA Model based on theory
+
+print(paste("SARIMA Model based on theory --> AIC:",
+            round(AIC(sarima),2),
+            "BIC:",
+            round(BIC(sarima),2)))
+
+```
+
+```{r}
+# Plot Residuals and Ljung-Box Test - H0: The level of correlation between the series and its lag is equal to zero, and therefore the series observations are independent
+
+checkresiduals(sarima,
+               lag = 24)
+
+```
+
+```{r}
+# Shapiro-Wilk Test - H0: Normally Distributed
+
+shapiro.test(sarima$residuals)
+
+```
+
+```{r}
+# Scoring SARIMA Model based on Theory
+
+accuracy(sarima.pred, test.ts)
+
+```
+
+```{r, fig.width = 8, fig.height = 6}
+
+# SARIMAX with Unemployment Rate
+
+train.Unr <- window(Unr, 
+                   start = c(2012,1),
+                   end = c(2021,9))
+test.Unr <- window(Unr, 
+                   start = c(2021,9), 
+                   end = c(2022,2))
+
+sarimax <- Arima(train.ts, 
+                order = c(2,1,3),
+                seasonal = list(order = c(1,1,1), period = 12),
+                xreg=train.Unr)
+
+sarimax.pred <- forecast(sarimax,
+                          h = 6,
+                          level = 0,
+                          xreg=test.Unr)
+
+SARIMAX_Unr_Train <- sarimax.pred$fitted
+
+SARIMAX_Unr_Test <- ts(c(sarimax.pred$fitted[117], sarimax.pred$mean), 
+                    start = c(2021,9), 
+                    end = c(2022,3), 
+                    frequency = 12)
+
+ts_plot(cbind(Train_Set,Test_Set,SARIMAX_Unr_Train,SARIMAX_Unr_Test),
+        slider = T,
+        Xgrid = T, 
+        Ygrid = T,
+        Ytitle = "Units",
+        Xtitle = "Year",
+        title = "SARIMAX(2,1,3)x(1,1,1) - Unemployment Rate",
+        width = 2)
+
+```
+
+```{r}
+# Metrics SARIMAX Model with Unr
+
+print(paste("SARIMAX Model with Unr as regressor --> AIC:",
+            round(AIC(sarimax),2),
+            "BIC:",
+            round(BIC(sarimax),2)))
+
+```
+
+```{r}
+# Plot Residuals and Ljung-Box Test - H0: The level of correlation between the series and its lag is equal to zero, and therefore the series observations are independent
+
+checkresiduals(sarimax,
+               lag = 24)
+
+```
+
+```{r}
+# Shapiro-Wilk Test - H0: Normally Distributed
+
+shapiro.test(sarimax$residuals)
+
+```
+
+```{r}
+# Scoring SARIMAX with Unemployment Rate
+
+accuracy(sarimax.pred, test.ts)
+
+```
+
+```{r}
+# Delete last variables
+
+rm(seasonal_test,
+   cv_d,
+   cv_q,
+   MIB,
+   Test_Set,
+   test.ts,
+   Train_Set,
+   train.ts,
+   valid.ts,
+   Validation_Set,
+   ITA.dec,
+   t,
+   SARIMAX_Unr_Train,
+   SARIMAX_Unr_Test,
+   train.Unr,
+   test.Unr,
+   valid.Unr,
+   SARIMA_Theory_Train,
+   SARIMA_Theory_Validation,
+   SARIMA_Theory_Test,
+   SARIMAX_Unr_Validation,
+   SARIMAX_MIB_Train,
+   SARIMAX_MIB_Validation,
+   train.MIB,
+   valid.MIB,
+   Auto_SARIMA_Train,
+   Auto_SARIMA_Validation,
+   SARIMA_Near_Train,
+   SARIMA_Near_Validation,
+   hw,
+   hw.pred,
+   HW_Train,
+   HW_Test,
+   ac,
+   i,
+   k,
+   D,
+   Q,
+   pac,
+   my_plot.decomposed.ts,
+   my_plot.lags.ts,
+   ITA_det,
+   ITA_des)
+
+```
+
+
